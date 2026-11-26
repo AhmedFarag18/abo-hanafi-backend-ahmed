@@ -1,4 +1,4 @@
-﻿using BrightMinds.Services.Services;
+using BrightMinds.Services.Services;
 using BrightMinds.Services.IServices;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
@@ -10,34 +10,28 @@ namespace BrightMinds.Services.ApplicationServicesConfigrations
 {
     public static class AddServices
     {
-        public static IServiceCollection AddApplicationServices(this IServiceCollection services,IConfiguration configuration)
+        public static IServiceCollection AddApplicationServices(this IServiceCollection services, IConfiguration configuration)
         {
             services.AddApplicationProfiles(configuration);
             services.AddApplicationRepositories();
-            // services.AddSingleton<IResponseCacheService,ResponseCacheService>();
             services.AddAuthentication(options =>
             {
                 options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
                 options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-            }).AddJwtBearer(
-                options =>
+            }).AddJwtBearer(options =>
+            {
+                options.TokenValidationParameters = new TokenValidationParameters
                 {
-                    options.TokenValidationParameters = new TokenValidationParameters()
-                    {
-                        ValidateIssuer = true,
-                        ValidIssuer = configuration["JWT:ValidIssuer"],
-                        ValidateAudience = true,
-                        ValidAudience = configuration["JWT:ValidAudience"],
-                        ValidateLifetime = true,
-                        ValidateIssuerSigningKey = true,
-                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:Key"]))
-                    };
-
-                }
-
-                );
+                    ValidateIssuer = true,
+                    ValidIssuer = configuration["JWT:ValidIssuer"],
+                    ValidateAudience = true,
+                    ValidAudience = configuration["JWT:ValidAudience"],
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:Key"]))
+                };
+            });
             services.AddSignalR();
-
             services.AddScoped<ITokenService, TokenService>();
             services.AddScoped<IEmailService, EmailService>();
             services.AddScoped<IRawMaterialService, RawMaterialService>();
@@ -56,12 +50,12 @@ namespace BrightMinds.Services.ApplicationServicesConfigrations
             services.AddScoped<IBaseUnitService, BaseUnitService>();
             services.AddScoped<IComplexUnitService, ComplexUnitService>();
             services.AddScoped<IRecipeCategoryService, RecipeCategoryService>();
-
             services.AddScoped<IPortionCategoryService, PortionCategoryService>();
             services.AddScoped<IFinalProductCategoryService, FinalProductCategoryService>();
             services.AddScoped<IFinalProductSubCategoryService, FinalProductSubCategoryService>();
             services.AddScoped<IRestaurantSupplyService, RestaurantSupplyService>();
+            services.AddScoped<IUnitConversionService, UnitConversionService>();
             return services;
         }
-    }   
+    }
 }
