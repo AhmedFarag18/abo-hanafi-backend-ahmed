@@ -6,41 +6,10 @@ namespace BrightMinds.Infrastructure.Migrations
 {
     public partial class AddFinalDataContractsSupport : Migration
     {
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.AddColumn<int>(
-                name: "RawMaterialUnitId",
-                table: "RecipeIngrediants",
-                type: "int",
-                nullable: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_RecipeIngrediants_RawMaterialUnitId",
-                table: "RecipeIngrediants",
-                column: "RawMaterialUnitId");
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_RecipeIngrediants_RawMaterialUnits_RawMaterialUnitId",
-                table: "RecipeIngrediants",
-                column: "RawMaterialUnitId",
-                principalTable: "RawMaterialUnits",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.NoAction);
-        }
-
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropForeignKey(
-                name: "FK_RecipeIngrediants_RawMaterialUnits_RawMaterialUnitId",
-                table: "RecipeIngrediants");
-
-            migrationBuilder.DropIndex(
-                name: "IX_RecipeIngrediants_RawMaterialUnitId",
-                table: "RecipeIngrediants");
-
-            migrationBuilder.DropColumn(
-                name: "RawMaterialUnitId",
-                table: "RecipeIngrediants");
-        }
+        // RawMaterialUnitId on RecipeIngrediants is created by AddThreeLevelRawMaterialUnits.
+        // This migration is intentionally empty to keep its historical migration ID discoverable
+        // without applying the same column/index/foreign-key a second time.
+        protected override void Up(MigrationBuilder migrationBuilder) { }
+        protected override void Down(MigrationBuilder migrationBuilder) { }
     }
 }
