@@ -110,9 +110,9 @@ namespace BrightMinds.Services.Services
 
             var (pricePerUnit, pricePerKg, pricePerInnerUnit, displayUnit) = CalculatePricePerUnitWithDetails(rawMaterial);
             result.PricePerUnit = pricePerUnit;
-            result.PricePerSubUnit = pricePerUnit;              
+            result.PricePerSubUnit = pricePerUnit;
             result.PricePerKg = pricePerKg;
-            result.PricePerInnerUnit = pricePerInnerUnit;     
+            result.PricePerInnerUnit = pricePerInnerUnit;
             result.PriceDisplayUnit = displayUnit;
 
             result.InnerUnitName = rawMaterial.InnerUnitName;
@@ -128,6 +128,7 @@ namespace BrightMinds.Services.Services
                 Data = result
             };
         }
+
         public async Task<Response> UpdateAsync(RawMaterialDto rawMaterialDto, int id)
         {
             var rawMaterial = await _unitOfWork.RawMaterialRepository.GetAsync(id);
@@ -209,6 +210,16 @@ namespace BrightMinds.Services.Services
             rawMaterial.InnerUnitsPerSubUnit = rawMaterialDto.InnerUnitsPerSubUnit;
             rawMaterial.InnerUnitWeightInKg = rawMaterialDto.InnerUnitWeightInKg;
 
+            rawMaterial.PurchaseUnitName           = rawMaterialDto.PurchaseUnitName;
+            rawMaterial.MiddleUnitName             = rawMaterialDto.MiddleUnitName;
+            rawMaterial.MiddleUnitsPerPurchaseUnit = rawMaterialDto.MiddleUnitsPerPurchaseUnit;
+            rawMaterial.SmallestUnitName           = rawMaterialDto.SmallestUnitName;
+            rawMaterial.SmallestUnitsPerMiddleUnit = rawMaterialDto.SmallestUnitsPerMiddleUnit;
+            rawMaterial.SmallestUnitWeightInKg     = rawMaterialDto.SmallestUnitWeightInKg;
+            rawMaterial.PricePerPurchaseUnit       = rawMaterialDto.PricePerPurchaseUnit;
+            rawMaterial.PricePerMiddleUnit         = rawMaterialDto.PricePerMiddleUnit;
+            rawMaterial.PricePerSmallestUnit       = rawMaterialDto.PricePerSmallestUnit;
+
             if (rawMaterial.UnitWeightInKg.HasValue && rawMaterial.UnitWeightInKg.Value > 0)
             {
                 var totalWeightInKg = rawMaterial.ContainerSize * rawMaterial.UnitWeightInKg.Value;
@@ -259,6 +270,7 @@ namespace BrightMinds.Services.Services
                 Data = result
             };
         }
+
         public async Task<Response> DeleteAsync(int id)
         {
             var rawMaterial = await _unitOfWork.RawMaterialRepository.GetAsync(id);
@@ -269,12 +281,11 @@ namespace BrightMinds.Services.Services
                     Message = "المادة الخام مش موجودة"
                 };
             _unitOfWork.RawMaterialRepository.Delete(rawMaterial);
-            
             try
             {
                 await _unitOfWork.CompleteAsync();
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return new Response()
                 {
@@ -294,31 +305,26 @@ namespace BrightMinds.Services.Services
         {
             var spec = new RawMaterialSpecifications(specParams, isCount: false);
             var data = await _unitOfWork.RawMaterialRepository.GetAllWithSpecAsync(spec);
-
             var countSpec = new RawMaterialSpecifications(specParams, isCount: true);
             var count = await _unitOfWork.RawMaterialRepository.GetCountWithSpecAsync(countSpec);
-
             var result = new List<RawMaterialDetailsDto>();
+
             foreach (var item in data)
             {
                 var dto = item.Adapt<RawMaterialDetailsDto>();
-
                 var (pricePerUnit, pricePerKg, pricePerInnerUnit, displayUnit) = CalculatePricePerUnitWithDetails(item);
                 dto.PricePerUnit = pricePerUnit;
                 dto.PricePerSubUnit = pricePerUnit;
                 dto.PricePerKg = pricePerKg;
                 dto.PricePerInnerUnit = pricePerInnerUnit;
                 dto.PriceDisplayUnit = displayUnit;
-
                 dto.InnerUnitName = item.InnerUnitName;
                 dto.InnerUnitsPerSubUnit = item.InnerUnitsPerSubUnit;
                 dto.InnerUnitWeightInKg = item.InnerUnitWeightInKg;
-
                 result.Add(dto);
             }
 
             var pagination = new Pagination(specParams.PageSize, specParams.PageIndex, count, result);
-
             return new Response()
             {
                 StatusCode = (int)HttpStatusCode.OK,
@@ -338,14 +344,12 @@ namespace BrightMinds.Services.Services
                 };
 
             var result = rawMaterial.Adapt<RawMaterialDetailsDto>();
-
             var (pricePerUnit, pricePerKg, pricePerInnerUnit, displayUnit) = CalculatePricePerUnitWithDetails(rawMaterial);
             result.PricePerUnit = pricePerUnit;
             result.PricePerSubUnit = pricePerUnit;
             result.PricePerKg = pricePerKg;
             result.PricePerInnerUnit = pricePerInnerUnit;
             result.PriceDisplayUnit = displayUnit;
-
             result.InnerUnitName = rawMaterial.InnerUnitName;
             result.InnerUnitsPerSubUnit = rawMaterial.InnerUnitsPerSubUnit;
             result.InnerUnitWeightInKg = rawMaterial.InnerUnitWeightInKg;
@@ -358,21 +362,6 @@ namespace BrightMinds.Services.Services
             };
         }
 
-        private decimal CalculatePricePerUnit(RawMaterial rawMaterial)
-        {
-            if (rawMaterial.ContainerSize <= 0) return 0;
-
-            if (rawMaterial.HandlingType == HandlingType.CountAndWeight &&
-                rawMaterial.UnitWeightInKg.HasValue &&
-                rawMaterial.UnitWeightInKg.Value > 0)
-            {
-                var totalWeight = rawMaterial.ContainerSize * rawMaterial.UnitWeightInKg.Value;
-                return totalWeight > 0 ? rawMaterial.TotalContainerPrice / totalWeight : 0;
-            }
-
-            return rawMaterial.TotalContainerPrice / rawMaterial.ContainerSize;
-        }
-
         private (decimal PricePerUnit, decimal? PricePerKg, decimal? PricePerInnerUnit, string DisplayUnit) CalculatePricePerUnitWithDetails(RawMaterial rawMaterial)
         {
             if (rawMaterial.ContainerSize <= 0)
@@ -382,13 +371,10 @@ namespace BrightMinds.Services.Services
             decimal? pricePerKg = null;
             string displayUnit;
 
-            if (rawMaterial.HandlingType == HandlingType.WeightOnly &&
-                rawMaterial.UnitWeightInKg.HasValue &&
-                rawMaterial.UnitWeightInKg.Value > 0)
+            if (rawMaterial.HandlingType == HandlingType.WeightOnly && rawMaterial.UnitWeightInKg.HasValue && rawMaterial.UnitWeightInKg.Value > 0)
             {
                 var totalWeightInKg = rawMaterial.ContainerSize * rawMaterial.UnitWeightInKg.Value;
                 pricePerKg = rawMaterial.TotalContainerPrice / totalWeightInKg;
-
                 if (rawMaterial.UnitType == UnitType.g)
                 {
                     pricePerSubUnit = pricePerKg.Value / 1000;
@@ -400,13 +386,10 @@ namespace BrightMinds.Services.Services
                     displayUnit = "kg";
                 }
             }
-            else if (rawMaterial.HandlingType == HandlingType.CountAndWeight &&
-                     rawMaterial.UnitWeightInKg.HasValue &&
-                     rawMaterial.UnitWeightInKg.Value > 0)
+            else if (rawMaterial.HandlingType == HandlingType.CountAndWeight && rawMaterial.UnitWeightInKg.HasValue && rawMaterial.UnitWeightInKg.Value > 0)
             {
                 var totalWeight = rawMaterial.ContainerSize * rawMaterial.UnitWeightInKg.Value;
                 pricePerKg = totalWeight > 0 ? rawMaterial.TotalContainerPrice / totalWeight : 0;
-
                 if (rawMaterial.UnitType == UnitType.kg || rawMaterial.UnitType == UnitType.g)
                 {
                     if (rawMaterial.UnitType == UnitType.g)
@@ -432,14 +415,10 @@ namespace BrightMinds.Services.Services
                 displayUnit = rawMaterial.UnitType.ToString();
             }
 
-            decimal? pricePerInnerUnit = null;
-            if (rawMaterial.InnerUnitsPerSubUnit > 0)
-            {
-                pricePerInnerUnit = pricePerSubUnit / rawMaterial.InnerUnitsPerSubUnit;
-            }
-
+            decimal? pricePerInnerUnit = rawMaterial.InnerUnitsPerSubUnit > 0
+                ? pricePerSubUnit / rawMaterial.InnerUnitsPerSubUnit
+                : null;
             return (pricePerSubUnit, pricePerKg, pricePerInnerUnit, displayUnit);
         }
-
     }
 }
