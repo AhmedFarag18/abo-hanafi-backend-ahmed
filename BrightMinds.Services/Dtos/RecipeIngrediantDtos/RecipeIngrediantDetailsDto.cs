@@ -1,6 +1,8 @@
+using BrightMinds.Core.Models;
+
 namespace BrightMinds.Services.Dtos.RecipeIngrediantDtos
 {
-    public class RecipeIngrediantDetailsDto
+    public sealed class RecipeIngrediantDetailsDto
     {
         public int Id { get; set; }
         public int RecipeId { get; set; }
@@ -11,7 +13,10 @@ namespace BrightMinds.Services.Dtos.RecipeIngrediantDtos
         public decimal Quantity { get; set; }
         public BrightMinds.Core.Enums.UnitType UnitType { get; set; }
         public decimal Price { get; set; }
+
         public int? RawMaterialUnitId { get; set; }
         public string? RawMaterialUnitName { get; set; }
+        public decimal? RawMaterialUnitWeightInKg { get; set; }
+        public decimal? RawMaterialUnitPrice { get; set; }
     }
 }

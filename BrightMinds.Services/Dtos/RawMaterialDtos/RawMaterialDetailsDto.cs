@@ -1,13 +1,16 @@
 using BrightMinds.Core.Enums;
+using System.ComponentModel.DataAnnotations;
 
 namespace BrightMinds.Services.Dtos.RawMaterialDtos
 {
-    public class RawMaterialDetailsDto
+    public sealed class RawMaterialDetailsDto
     {
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
         public HandlingType HandlingType { get; set; }
+
+        // Legacy response fields
         public string? ContainerUnitName { get; set; }
         public decimal ContainerSize { get; set; }
         public UnitType UnitType { get; set; }
@@ -27,14 +30,13 @@ namespace BrightMinds.Services.Dtos.RawMaterialDtos
         public decimal? PricePerKg { get; set; }
         public string? PriceDisplayUnit { get; set; }
         public decimal? PricePerPiece { get; set; }
-
-        // Legacy fields are maintained in responses for older frontend builds.
         public string? InnerUnitName { get; set; }
         public decimal InnerUnitsPerSubUnit { get; set; }
         public decimal? InnerUnitWeightInKg { get; set; }
         public decimal? PricePerInnerUnit { get; set; }
         public decimal? PricePerSubUnit { get; set; }
 
+        // Unified three-level response fields
         public string? PurchaseUnitName { get; set; }
         public string? MiddleUnitName { get; set; }
         public decimal? MiddleUnitsPerPurchaseUnit { get; set; }
@@ -45,15 +47,19 @@ namespace BrightMinds.Services.Dtos.RawMaterialDtos
         public decimal? PricePerMiddleUnit { get; set; }
         public decimal? PricePerSmallestUnit { get; set; }
 
-        // Preview values only; never written back to the catalog prices.
-        public decimal? CalculatedPricePerMiddleUnit =>
-            PricePerPurchaseUnit.HasValue && MiddleUnitsPerPurchaseUnit > 0
-                ? PricePerPurchaseUnit.Value / MiddleUnitsPerPurchaseUnit.Value
-                : null;
+        public decimal? CalculatedPricePerMiddleUnit { get; set; }
+        public decimal? CalculatedPricePerSmallestUnit { get; set; }
 
-        public decimal? CalculatedPricePerSmallestUnit =>
-            PricePerMiddleUnit.HasValue && SmallestUnitsPerMiddleUnit > 0
-                ? PricePerMiddleUnit.Value / SmallestUnitsPerMiddleUnit.Value
-                : null;
+        public List<RawMaterialUnitDetailsDto> Units { get; set; } = new();
+    }
+
+    public sealed class RawMaterialUnitDetailsDto
+    {
+        public int Id { get; set; }
+        public int UnitId { get; set; }
+        public string UnitName { get; set; } = string.Empty;
+        public decimal ConversionFactor { get; set; }
+        public decimal? PricePerUnit { get; set; }
+        public decimal? WeightInKg { get; set; }
     }
 }
