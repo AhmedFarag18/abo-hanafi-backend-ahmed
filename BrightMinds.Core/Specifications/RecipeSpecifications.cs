@@ -1,4 +1,4 @@
-﻿using BrightMinds.Core.ISpecificationParams;
+using BrightMinds.Core.ISpecificationParams;
 using BrightMinds.Core.Models;
 using System.Linq.Expressions;
 
@@ -8,32 +8,31 @@ namespace BrightMinds.Core.Specifications
     {
         public RecipeSpecifications(IRecipeSpecParams? specParams, int? id, bool isCount) : base(BuildCriteria(specParams, id))
         {
-            AddInclude(R => R.Ingrediants);
-            AddInclude(R => R.Portions);
-
-            AddInclude(R => R.PortionCategory);     
+            AddInclude(recipe => recipe.Ingrediants);
+            AddInclude(recipe => recipe.Portions);
+            AddInclude(recipe => recipe.PortionCategory);
 
             AddIncludeString("Ingrediants.RawMaterial");
+            AddIncludeString("Ingrediants.RawMaterialUnit");
+            AddIncludeString("Ingrediants.RawMaterialUnit.Unit");
             AddIncludeString("Ingrediants.SubRecipe");
 
             if (!isCount && specParams != null)
             {
                 ApplyPagination(specParams.PageSize * (specParams.PageIndex - 1), specParams.PageSize);
                 if (string.IsNullOrEmpty(specParams.OrderBy) || specParams.OrderBy == "new")
-                    AddOrderByDesc(x => x.Id);
-                else AddOrderBy(x => x.Id);
+                    AddOrderByDesc(recipe => recipe.Id);
+                else
+                    AddOrderBy(recipe => recipe.Id);
             }
         }
 
         private static Expression<Func<Recipe, bool>> BuildCriteria(IRecipeSpecParams? specParams = null, int? id = null)
         {
-            return x => (id == null || x.Id == id) &&
-                        (x.IsDeleted == false) &&
-                        (specParams == null ||
-                         string.IsNullOrEmpty(specParams.SearchName) || x.Name.ToLower().Contains(specParams.SearchName.ToLower())) &&
-                        (specParams == null ||
-                         string.IsNullOrEmpty(specParams.Category) || x.Category == specParams.Category);
+            return recipe => (id == null || recipe.Id == id) &&
+                             !recipe.IsDeleted &&
+                             (specParams == null || string.IsNullOrEmpty(specParams.SearchName) || recipe.Name.ToLower().Contains(specParams.SearchName.ToLower())) &&
+                             (specParams == null || string.IsNullOrEmpty(specParams.Category) || recipe.Category == specParams.Category);
         }
-
     }
 }

@@ -1,7 +1,7 @@
-﻿using Blendd.Infrastructure.DataAccess;
+using Blendd.Infrastructure.DataAccess;
 using BrightMinds.Core.Interfaces;
 using BrightMinds.Core.Models;
-using System;
+using Microsoft.EntityFrameworkCore;
 
 namespace BrightMinds.Infrastructure.Repositories
 {
@@ -9,12 +9,14 @@ namespace BrightMinds.Infrastructure.Repositories
     {
         private readonly AppDbContext _context;
 
-        public RawMaterialRepository(AppDbContext context):base(context) { }
+        public RawMaterialRepository(AppDbContext context) : base(context)
+        {
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+        }
 
         public async Task<bool> Exists(int id)
         {
-           var rawMaterial =  await _context.RawMaterials.FindAsync(id);
-           return rawMaterial != null;
+            return await _context.RawMaterials.AnyAsync(rawMaterial => rawMaterial.Id == id);
         }
     }
 }
