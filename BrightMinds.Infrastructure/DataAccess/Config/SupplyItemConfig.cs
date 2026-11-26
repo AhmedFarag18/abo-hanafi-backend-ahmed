@@ -1,3 +1,4 @@
+using BrightMinds.Core.Enums;
 using BrightMinds.Core.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;

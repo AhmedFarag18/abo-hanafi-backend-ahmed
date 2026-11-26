@@ -28,9 +28,10 @@ namespace BrightMinds.Services.ApplicationServicesConfigrations
                     ValidAudience = configuration["JWT:ValidAudience"],
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:Key"]))
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:Key"]!))
                 };
             });
+
             services.AddSignalR();
             services.AddScoped<ITokenService, TokenService>();
             services.AddScoped<IEmailService, EmailService>();
@@ -55,6 +56,7 @@ namespace BrightMinds.Services.ApplicationServicesConfigrations
             services.AddScoped<IFinalProductSubCategoryService, FinalProductSubCategoryService>();
             services.AddScoped<IRestaurantSupplyService, RestaurantSupplyService>();
             services.AddScoped<IUnitConversionService, UnitConversionService>();
+            services.AddScoped<MaterialWarehouseWorkflow>();
             return services;
         }
     }
