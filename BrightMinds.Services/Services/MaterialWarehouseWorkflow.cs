@@ -24,7 +24,14 @@ namespace BrightMinds.Services.Services
             _httpContextAccessor = httpContextAccessor;
         }
 
-        private sealed record PlannedIngredient(RawMaterial Material, decimal Quantity, decimal InventoryQuantity, decimal Cost, string UnitName, decimal? WeightInKg);
+        private sealed record PlannedIngredient(
+            RawMaterial Material,
+            decimal InputQuantity,
+            string InputUnitName,
+            decimal InventoryQuantity,
+            UnitType InventoryUnitType,
+            decimal Cost,
+            decimal? WeightInKg);
 
         public async Task<Response> ProduceAsync(int recipeId)
         {
@@ -43,53 +50,65 @@ namespace BrightMinds.Services.Services
                 return new Response { StatusCode = (int)HttpStatusCode.Unauthorized, Message = "يجب تسجيل الدخول أولاً" };
 
             var plan = new List<PlannedIngredient>();
-            var path = new HashSet<int>();
-            var planResult = await CollectIngredientsAsync(recipe, 1m, path, plan);
+            var planResult = await CollectIngredientsAsync(recipe, 1m, new HashSet<int>(), plan);
             if (planResult != null)
                 return planResult;
 
-            // Validate the entire aggregated plan before changing any stock. This also handles
-            // repeated ingredients and repeated references to the same sub-recipe correctly.
+            // Validate aggregated material requirements before changing stock, so duplicate lines
+            // and repeated sub-recipes are counted together and no ingredient is deducted twice.
             var requirements = plan.GroupBy(item => item.Material.Id)
-                .Select(group => new { MaterialId = group.Key, Quantity = group.Sum(item => item.InventoryQuantity), Cost = group.Sum(item => item.Cost), Items = group.ToList() })
+                .Select(group => new
+                {
+                    MaterialId = group.Key,
+                    Quantity = group.Sum(item => item.InventoryQuantity),
+                    Items = group.ToList()
+                })
                 .ToList();
+
             var inventoryByMaterial = new Dictionary<int, WarehouseSuppliesInventory>();
             foreach (var requirement in requirements)
             {
                 var inventory = await _unitOfWork.WarehouseSuppliesInventoryRepository.GetFromSubWarehouseAsync(requirement.MaterialId);
                 if (inventory == null)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"المادة {requirement.Items[0].Material.Name} غير موجودة في المخزن الفرعي" };
-                if (inventory.Quantity < requirement.Quantity)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"كمية {requirement.Items[0].Material.Name} في المخزن الفرعي غير كافية (المطلوب: {requirement.Quantity}، المتاح: {inventory.Quantity})" };
+                    return new Response { StatusCode = 400, Message = $"المادة {requirement.Items[0].Material.Name} غير موجودة في المخزن الفرعي" };
+
+                var neededInInventoryUnit = ConvertToInventoryUnit(requirement.Quantity, requirement.Items[0].InventoryUnitType, inventory.UnitType);
+                if (!neededInInventoryUnit.HasValue)
+                    return new Response { StatusCode = 400, Message = $"لا يمكن تحويل الكمية إلى وحدة رصيد {requirement.Items[0].Material.Name}" };
+                if (inventory.Quantity < neededInInventoryUnit.Value)
+                    return new Response { StatusCode = 400, Message = $"كمية {requirement.Items[0].Material.Name} غير كافية (المطلوب: {neededInInventoryUnit.Value}، المتاح: {inventory.Quantity})" };
+
                 inventoryByMaterial.Add(requirement.MaterialId, inventory);
             }
 
+            // Mutations start only after every requested material passed stock validation.
             var withdrawItems = new List<WithdrawItem>();
             foreach (var requirement in requirements)
             {
                 var inventory = inventoryByMaterial[requirement.MaterialId];
-                inventory.Quantity -= requirement.Quantity;
-                var rawMaterial = requirement.Items[0].Material;
-                var containerSize = rawMaterial.ContainerSize;
-                inventory.ContainerQuantity = containerSize > 0 ? inventory.Quantity / containerSize : null;
-                inventory.DisplayDetails = $"{rawMaterial.Name}: استهلاك {requirement.Quantity} {inventory.UnitType}؛ الرصيد {inventory.Quantity} {inventory.UnitType}";
+                var targetUnit = inventory.UnitType;
+                var required = requirement.Items.Sum(item => ConvertToInventoryUnit(item.InventoryQuantity, item.InventoryUnitType, targetUnit) ?? 0m);
+                inventory.Quantity -= required;
+                var material = requirement.Items[0].Material;
+                inventory.ContainerQuantity = material.ContainerSize > 0 ? inventory.Quantity / material.ContainerSize : null;
+                inventory.DisplayDetails = $"{material.Name}: الرصيد {inventory.Quantity} {targetUnit}";
+
                 if (inventory.Quantity == 0)
                     _unitOfWork.WarehouseSuppliesInventoryRepository.Delete(inventory);
                 else
                     _unitOfWork.WarehouseSuppliesInventoryRepository.Update(inventory);
 
-                // Keep one auditable history row per recipe line, including lines in sub-recipes.
-                foreach (var item in requirement.Items)
+                foreach (var line in requirement.Items)
                 {
-                    var conversionDescription = item.UnitName == item.Material.UnitType.ToString()
-                        ? $"{item.Quantity} {item.UnitName}"
-                        : $"{item.Quantity} {item.UnitName} = {item.InventoryQuantity} {inventory.UnitType}";
+                    var convertedLine = ConvertToInventoryUnit(line.InventoryQuantity, line.InventoryUnitType, targetUnit);
+                    if (!convertedLine.HasValue)
+                        return new Response { StatusCode = 400, Message = $"لا يمكن تسجيل تحويل المادة {line.Material.Name}" };
                     withdrawItems.Add(new WithdrawItem
                     {
-                        Name = item.Material.Name,
-                        Quantity = item.InventoryQuantity,
-                        UnitType = inventory.UnitType,
-                        DisplayDetails = conversionDescription
+                        Name = line.Material.Name,
+                        Quantity = convertedLine.Value,
+                        UnitType = targetUnit,
+                        DisplayDetails = $"{line.InputQuantity} {line.InputUnitName} = {convertedLine.Value} {targetUnit}"
                     });
                 }
             }
@@ -118,18 +137,24 @@ namespace BrightMinds.Services.Services
                 Cost = plan.Sum(item => item.Cost),
                 WithdrawHistory = history
             };
-            if (recipe.RequiresSettlement)
-                product.WithdrawHistory = history;
 
             await _unitOfWork.WithdrawHistoryRepository.Add(history);
             await _unitOfWork.ProductRepository.Add(product);
-            return new Response { StatusCode = (int)HttpStatusCode.OK, Message = "تم تصنيع المنتج وخصم المكونات مرة واحدة بنجاح", Data = product.Adapt<ProductDetailsDto>() };
+            return new Response
+            {
+                StatusCode = (int)HttpStatusCode.OK,
+                Message = "تم تصنيع المنتج وخصم المكونات مرة واحدة بنجاح",
+                Data = product.Adapt<ProductDetailsDto>()
+            };
         }
+
+        private decimal? ConvertToInventoryUnit(decimal quantity, UnitType source, UnitType target) =>
+            _unitConversion.ConvertKnownUnitType(quantity, source, target);
 
         private async Task<Response?> CollectIngredientsAsync(Recipe recipe, decimal multiplier, HashSet<int> path, List<PlannedIngredient> plan)
         {
             if (!path.Add(recipe.Id))
-                return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = "يوجد تعارض دائري في الوصفات الفرعية" };
+                return new Response { StatusCode = 400, Message = "يوجد تعارض دائري في الوصفات الفرعية" };
 
             foreach (var ingredient in recipe.Ingrediants)
             {
@@ -138,7 +163,7 @@ namespace BrightMinds.Services.Services
                 {
                     var subRecipe = await _unitOfWork.RecipeRepository.GetWithSpecAsync(new RecipeSpecifications(null, ingredient.SubRecipeId, false));
                     if (subRecipe == null || subRecipe.IsDeleted)
-                        return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = "الوصفة الفرعية غير موجودة" };
+                        return new Response { StatusCode = 400, Message = "الوصفة الفرعية غير موجودة" };
                     var nestedResult = await CollectIngredientsAsync(subRecipe, scaledQuantity, path, plan);
                     if (nestedResult != null)
                         return nestedResult;
@@ -146,60 +171,55 @@ namespace BrightMinds.Services.Services
                 }
 
                 if (!ingredient.RawMaterialId.HasValue)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = "مكوّن المادة الخام غير مكتمل" };
+                    return new Response { StatusCode = 400, Message = "مكوّن المادة الخام غير مكتمل" };
 
                 var material = ingredient.RawMaterial ?? await _unitOfWork.RawMaterialRepository.GetAsync(ingredient.RawMaterialId.Value);
                 if (material == null)
-                    return new Response { StatusCode = (int)HttpStatusCode.NotFound, Message = "المادة الخام غير موجودة" };
+                    return new Response { StatusCode = 404, Message = "المادة الخام غير موجودة" };
 
                 RawMaterialUnit? selectedUnit = null;
-                string unitName;
-                decimal? weightPerUnit;
-                decimal costPerSelectedUnit;
-                decimal inventoryQuantity;
+                string inputUnitName;
+                UnitType baseUnitType;
+                decimal inputQuantity = scaledQuantity;
+                decimal? unitWeight;
+                decimal cost;
 
                 if (ingredient.RawMaterialUnitId.HasValue)
                 {
                     selectedUnit = material.Units?.FirstOrDefault(unit => unit.Id == ingredient.RawMaterialUnitId.Value);
                     if (selectedUnit == null || selectedUnit.RawMaterialId != material.Id || selectedUnit.ConversionFactor <= 0)
-                        return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = "وحدة الوصفة لا تنتمي للمادة الخام أو عامل تحويلها غير صالح" };
+                        return new Response { StatusCode = 400, Message = "وحدة الوصفة لا تنتمي للمادة الخام أو عامل تحويلها غير صالح" };
                     if (!selectedUnit.PricePerUnit.HasValue || selectedUnit.PricePerUnit.Value <= 0)
-                        return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"السعر غير محدد للوحدة المختارة من المادة {material.Name}" };
+                        return new Response { StatusCode = 400, Message = $"السعر غير محدد للوحدة المختارة من المادة {material.Name}" };
 
                     var converted = _unitConversion.ToInventoryQuantity(material, scaledQuantity, selectedUnit.Id, selectedUnit);
                     if (!converted.HasValue)
-                        return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"تعذر تحويل وحدة {material.Name} إلى وحدة المخزون" };
-                    inventoryQuantity = converted.Value;
-                    unitName = selectedUnit.Unit?.Name ?? material.SmallestUnitName ?? material.MiddleUnitName ?? material.PurchaseUnitName ?? "وحدة المادة";
-                    weightPerUnit = selectedUnit.WeightInKg;
-                    costPerSelectedUnit = selectedUnit.PricePerUnit.Value;
-                }
-                else
-                {
-                    var converted = _unitConversion.ConvertKnownUnitType(scaledQuantity, ingredient.UnitType, material.UnitType);
-                    if (!converted.HasValue)
-                        return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"لا يوجد تحويل معروف من {ingredient.UnitType} إلى وحدة مخزون {material.UnitType} للمادة {material.Name}" };
-                    inventoryQuantity = converted.Value;
-                    unitName = ingredient.UnitType.ToString();
-                    weightPerUnit = material.UnitWeightInKg;
-                    costPerSelectedUnit = material.PricePerInnerUnit ?? material.PricePerUnit;
+                        return new Response { StatusCode = 400, Message = $"تعذر تحويل وحدة {material.Name} إلى وحدة المخزون" };
+                    inputUnitName = selectedUnit.Unit?.Name ?? material.SmallestUnitName ?? material.MiddleUnitName ?? material.PurchaseUnitName ?? "وحدة المادة";
+                    baseUnitType = material.UnitType;
+                    unitWeight = selectedUnit.WeightInKg;
+                    cost = scaledQuantity * selectedUnit.PricePerUnit.Value;
+
+                    var unitQuantityInInventory = ConvertToInventoryUnit(converted.Value, material.UnitType, material.UnitType);
+                    if (!unitQuantityInInventory.HasValue)
+                        return new Response { StatusCode = 400, Message = $"وحدة المخزون غير معروفة للمادة {material.Name}" };
+                    plan.Add(new PlannedIngredient(material, inputQuantity, inputUnitName, unitQuantityInInventory.Value, baseUnitType, cost, unitWeight.HasValue ? scaledQuantity * unitWeight.Value : null));
+                    continue;
                 }
 
+                var legacyConverted = _unitConversion.ConvertKnownUnitType(scaledQuantity, ingredient.UnitType, material.UnitType);
+                if (!legacyConverted.HasValue)
+                    return new Response { StatusCode = 400, Message = $"لا يوجد تحويل معروف من {ingredient.UnitType} إلى وحدة مخزون {material.UnitType} للمادة {material.Name}" };
+                inputUnitName = ingredient.UnitType.ToString();
+                baseUnitType = material.UnitType;
+                unitWeight = material.UnitWeightInKg;
                 var inventory = await _unitOfWork.WarehouseSuppliesInventoryRepository.GetFromSubWarehouseAsync(material.Id);
                 if (inventory == null)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"المادة {material.Name} غير موجودة في المخزن الفرعي" };
+                    return new Response { StatusCode = 400, Message = $"المادة {material.Name} غير موجودة في المخزن الفرعي" };
 
-                var inventoryUnitQuantity = inventory.UnitType == material.UnitType
-                    ? inventoryQuantity
-                    : _unitConversion.ConvertKnownUnitType(inventoryQuantity, material.UnitType, inventory.UnitType);
-                if (!inventoryUnitQuantity.HasValue)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"وحدة رصيد المخزون غير متوافقة مع المادة {material.Name}" };
-
-                var cost = selectedUnit != null
-                    ? scaledQuantity * costPerSelectedUnit
-                    : inventoryUnitQuantity.Value * inventory.Price;
-                var itemWeight = weightPerUnit.HasValue ? scaledQuantity * weightPerUnit.Value : (decimal?)null;
-                plan.Add(new PlannedIngredient(material, scaledQuantity, inventoryUnitQuantity.Value, cost, unitName, itemWeight));
+                // For legacy ingredients, inventory.Price is the actual batch valuation per inventory unit.
+                cost = legacyConverted.Value * inventory.Price;
+                plan.Add(new PlannedIngredient(material, inputQuantity, inputUnitName, legacyConverted.Value, baseUnitType, cost, unitWeight.HasValue ? scaledQuantity * unitWeight.Value : null));
             }
 
             path.Remove(recipe.Id);
@@ -211,76 +231,90 @@ namespace BrightMinds.Services.Services
             var mainWarehouse = await _unitOfWork.WarehouseRepository.GetByTypeAsync(WarehouseType.MainWarehouse);
             var subWarehouse = await _unitOfWork.WarehouseRepository.GetByTypeAsync(WarehouseType.SubWarehouse);
             if (mainWarehouse == null || subWarehouse == null)
-                return new Response { StatusCode = (int)HttpStatusCode.NotFound, Message = "المخزن الرئيسي أو المخزن الفرعي غير موجود" };
+                return new Response { StatusCode = 404, Message = "المخزن الرئيسي أو المخزن الفرعي غير موجود" };
 
             var prepared = new List<(WarehouseSuppliesInventory Inventory, RawMaterial Material, decimal RequestedQuantity, decimal BaseQuantity, string UnitName)>();
             foreach (var line in request.WithdrawRequests)
             {
-                var inventory = await _unitOfWork.WarehouseSuppliesInventoryRepository
-                    .GetWithSpecAsync(new WarehouseSuppliesInventorySpecifications(null, mainWarehouse.Id, line.Id, false));
+                var inventory = await _unitOfWork.WarehouseSuppliesInventoryRepository.GetWithSpecAsync(new WarehouseSuppliesInventorySpecifications(null, mainWarehouse.Id, line.Id, false));
                 if (inventory == null || inventory.SupplyItem?.RawMaterial == null)
-                    return new Response { StatusCode = (int)HttpStatusCode.NotFound, Message = $"العنصر {line.Id} غير موجود في المخزن الرئيسي" };
+                    return new Response { StatusCode = 404, Message = $"العنصر {line.Id} غير موجود في المخزن الرئيسي" };
 
                 var material = inventory.SupplyItem.RawMaterial;
                 decimal requestedQuantity;
-                decimal basePerRequestedUnit;
+                decimal baseQuantity;
                 string unitName;
-                if (line.Quantity.HasValue)
+                if (line.RawMaterialUnitId.HasValue)
+                {
+                    var selectedUnit = material.Units?.FirstOrDefault(unit => unit.Id == line.RawMaterialUnitId.Value);
+                    if (selectedUnit == null || selectedUnit.RawMaterialId != material.Id)
+                        return new Response { StatusCode = 400, Message = "الوحدة المحددة لا تنتمي للمادة الخام" };
+                    // Warehouse withdrawal contract explicitly supports purchase/middle only.
+                    var level = selectedUnit.UnitId == 0 ? string.Empty :
+                        selectedUnit.Unit?.Name == material.PurchaseUnitName ? "purchase" :
+                        selectedUnit.Unit?.Name == material.MiddleUnitName ? "middle" : string.Empty;
+                    if (level == "")
+                        return new Response { StatusCode = 400, Message = "السحب مسموح بوحدة الشراء أو الوحدة الوسطى فقط" };
+                    requestedQuantity = line.Quantity ?? 0m;
+                    var converted = _unitConversion.ToInventoryQuantity(material, requestedQuantity, selectedUnit.Id, selectedUnit);
+                    if (!converted.HasValue)
+                        return new Response { StatusCode = 400, Message = $"عامل تحويل الوحدة غير صالح للمادة {material.Name}" };
+                    baseQuantity = converted.Value;
+                    unitName = selectedUnit.Unit?.Name ?? level;
+                }
+                else if (line.Quantity.HasValue)
                 {
                     requestedQuantity = line.Quantity.Value;
                     if (line.UnitLevel == "purchase")
                     {
-                        basePerRequestedUnit = material.ContainerSize > 0 ? material.ContainerSize : material.MiddleUnitsPerPurchaseUnit ?? 0m;
+                        baseQuantity = requestedQuantity * (material.ContainerSize > 0 ? material.ContainerSize : material.MiddleUnitsPerPurchaseUnit ?? 0m);
                         unitName = material.PurchaseUnitName ?? material.ContainerUnitName ?? "وحدة الشراء";
                     }
                     else if (line.UnitLevel == "middle")
                     {
-                        var unitsPerPurchase = material.MiddleUnitsPerPurchaseUnit.GetValueOrDefault();
-                        var basePerPurchase = material.ContainerSize > 0 ? material.ContainerSize : unitsPerPurchase;
-                        if (unitsPerPurchase <= 0)
-                            return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"تحويل الوحدة الوسطى غير معرف للمادة {material.Name}" };
-                        basePerRequestedUnit = basePerPurchase / unitsPerPurchase;
+                        var middlesPerPurchase = material.MiddleUnitsPerPurchaseUnit.GetValueOrDefault();
+                        var inventoryPerPurchase = material.ContainerSize > 0 ? material.ContainerSize : middlesPerPurchase;
+                        if (middlesPerPurchase <= 0 || inventoryPerPurchase <= 0)
+                            return new Response { StatusCode = 400, Message = $"تحويل الوحدة الوسطى غير معرف للمادة {material.Name}" };
+                        baseQuantity = requestedQuantity * inventoryPerPurchase / middlesPerPurchase;
                         unitName = material.MiddleUnitName ?? material.SubUnitName ?? "الوحدة الوسطى";
                     }
                     else
-                        return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = "السحب مسموح بوحدة الشراء أو الوحدة الوسطى فقط" };
+                        return new Response { StatusCode = 400, Message = "السحب مسموح بوحدة الشراء أو الوحدة الوسطى فقط" };
                 }
                 else
                 {
                     requestedQuantity = line.ContainerQuantity ?? 0m;
-                    basePerRequestedUnit = material.ContainerSize;
+                    baseQuantity = requestedQuantity * material.ContainerSize;
                     unitName = material.PurchaseUnitName ?? material.ContainerUnitName ?? "وحدة الشراء";
                 }
 
-                if (requestedQuantity <= 0 || basePerRequestedUnit <= 0)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"بيانات التحويل أو الكمية غير صالحة للمادة {material.Name}" };
+                if (requestedQuantity <= 0 || baseQuantity <= 0)
+                    return new Response { StatusCode = 400, Message = $"بيانات التحويل أو الكمية غير صالحة للمادة {material.Name}" };
 
-                var baseQuantity = requestedQuantity * basePerRequestedUnit;
-                prepared.Add((inventory, material, requestedQuantity, baseQuantity, unitName));
+                var convertedToInventoryUnit = ConvertToInventoryUnit(baseQuantity, material.UnitType, inventory.UnitType);
+                if (!convertedToInventoryUnit.HasValue)
+                    return new Response { StatusCode = 400, Message = $"وحدة رصيد المخزون غير متوافقة للمادة {material.Name}" };
+                prepared.Add((inventory, material, requestedQuantity, convertedToInventoryUnit.Value, unitName));
             }
 
             foreach (var group in prepared.GroupBy(line => line.Inventory.Id))
-            {
-                var totalRequired = group.Sum(line => line.BaseQuantity);
-                if (group.First().Inventory.Quantity < totalRequired)
-                    return new Response { StatusCode = (int)HttpStatusCode.BadRequest, Message = $"رصيد {group.First().Material.Name} غير كافٍ" };
-            }
+                if (group.First().Inventory.Quantity < group.Sum(line => line.BaseQuantity))
+                    return new Response { StatusCode = 400, Message = $"رصيد {group.First().Material.Name} غير كافٍ" };
 
             foreach (var group in prepared.GroupBy(line => line.Inventory.Id))
             {
                 var inventory = group.First().Inventory;
                 var material = group.First().Material;
-                var deducted = group.Sum(line => line.BaseQuantity);
-                inventory.Quantity -= deducted;
+                inventory.Quantity -= group.Sum(line => line.BaseQuantity);
                 inventory.ContainerQuantity = material.ContainerSize > 0 ? inventory.Quantity / material.ContainerSize : null;
-                inventory.DisplayDetails = $"{inventory.Quantity} {inventory.UnitType}";
+                inventory.DisplayDetails = $"{material.Name}: الرصيد {inventory.Quantity} {inventory.UnitType}";
                 if (inventory.Quantity == 0)
                     _unitOfWork.WarehouseSuppliesInventoryRepository.Delete(inventory);
                 else
                     _unitOfWork.WarehouseSuppliesInventoryRepository.Update(inventory);
             }
 
-            var claims = _httpContextAccessor.HttpContext?.User?.Claims;
             var history = new WithdrawHistory
             {
                 WarehouseId = mainWarehouse.Id,
@@ -291,7 +325,6 @@ namespace BrightMinds.Services.Services
             };
             foreach (var line in prepared)
             {
-                var existingSubStock = await _unitOfWork.WarehouseSuppliesInventoryRepository.GetFromSubWarehouseAsync(line.Material.Id);
                 var subItem = new WarehouseSuppliesInventory
                 {
                     WarehouseId = subWarehouse.Id,
@@ -314,7 +347,7 @@ namespace BrightMinds.Services.Services
             }
 
             await _unitOfWork.WithdrawHistoryRepository.Add(history);
-            return new Response { StatusCode = (int)HttpStatusCode.OK, Message = "تم السحب للمخزن الفرعي بنجاح" };
+            return new Response { StatusCode = 200, Message = "تم السحب للمخزن الفرعي بنجاح" };
         }
     }
 }
