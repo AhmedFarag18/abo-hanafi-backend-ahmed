@@ -11,8 +11,9 @@ namespace BrightMinds.Core.Specifications
             AddInclude(recipe => recipe.Ingrediants);
             AddInclude(recipe => recipe.Portions);
             AddInclude(recipe => recipe.PortionCategory);
-
             AddIncludeString("Ingrediants.RawMaterial");
+            AddIncludeString("Ingrediants.RawMaterial.Units");
+            AddIncludeString("Ingrediants.RawMaterial.Units.Unit");
             AddIncludeString("Ingrediants.RawMaterialUnit");
             AddIncludeString("Ingrediants.RawMaterialUnit.Unit");
             AddIncludeString("Ingrediants.SubRecipe");
