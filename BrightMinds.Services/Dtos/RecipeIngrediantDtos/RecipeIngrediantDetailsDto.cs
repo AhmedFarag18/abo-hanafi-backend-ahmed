@@ -18,5 +18,6 @@ namespace BrightMinds.Services.Dtos.RecipeIngrediantDtos
         public string? RawMaterialUnitName { get; set; }
         public decimal? RawMaterialUnitWeightInKg { get; set; }
         public decimal? RawMaterialUnitPrice { get; set; }
+        public decimal? RawMaterialUnitConversionFactor { get; set; }
     }
 }

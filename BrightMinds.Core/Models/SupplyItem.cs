@@ -1,48 +1,35 @@
-﻿using System;
-using System.ComponentModel.DataAnnotations.Schema;
 using BrightMinds.Core.Enums;
 using BrightMinds.Core.Models;
 
 namespace BrightMinds.Core.Models
 {
-
     public class SupplyItem : BaseEntity
     {
-        public string Name { get; set; }
-
+        public string Name { get; set; } = string.Empty;
         public decimal Quantity { get; set; }
-
         public decimal? ContainerQuantity { get; set; }
-
         public string? DisplayDetails { get; set; }
 
-        public decimal UnitPrice { get; set; }    
+        // Actual batch/supply unit price. Catalog/reference prices remain on RawMaterial.
+        public decimal UnitPrice { get; set; }
 
-        [ForeignKey("Supply")]
+        // Optional explicit valuation price used to value inventory; defaults to UnitPrice in SupplyService.
+        public decimal? ValuationPrice { get; set; }
+
         public int SupplyId { get; set; }
-        public virtual Supply Supply { get; set; }
-
-        [ForeignKey("RawMaterial")]
+        public virtual Supply Supply { get; set; } = null!;
         public int RawMaterialId { get; set; }
-        public virtual RawMaterial RawMaterial { get; set; }
+        public virtual RawMaterial RawMaterial { get; set; } = null!;
+        public int? RawMaterialUnitId { get; set; }
+        public virtual RawMaterialUnit? RawMaterialUnit { get; set; }
 
         public UnitType UnitType { get; set; }
-
-        public decimal? ReceivedWeightKg { get; set; }          
-        public decimal? ExchangePrice { get; set; }          
-        public decimal? PriceMultiplier { get; set; }       
-
-        public virtual ICollection<WarehouseSuppliesInventory> warehouses { get; set; }
-
-        //  ✅ جديد: طريقة الاستلام (حاوية / وحدة صغرى)
-        // ============================================================
+        public decimal? ReceivedWeightKg { get; set; }
+        public decimal? ExchangePrice { get; set; }
+        public decimal? PriceMultiplier { get; set; }
+        public virtual ICollection<WarehouseSuppliesInventory> Warehouses { get; set; } = new List<WarehouseSuppliesInventory>();
         public ReceivingMethod ReceivedBy { get; set; } = ReceivingMethod.Container;
-
-        // ============================================================
-        //  ✅ جديد: القيم الأصلية للمستخدم (للتدقيق)
-        // ============================================================
-        public decimal? OriginalQuantity { get; set; }   // الكمية الأصلية اللي المستخدم دخلها
-        public decimal? OriginalPrice { get; set; }      // السعر الأصلي اللي المستخدم دخله
-
+        public decimal? OriginalQuantity { get; set; }
+        public decimal? OriginalPrice { get; set; }
     }
 }
